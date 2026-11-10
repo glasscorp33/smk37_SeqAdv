@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: GPL-3.0-only WITH GPL-3.0-linking-exception
+# Builds the SMK-37 Elite firmware on GitHub, so no toolchain is needed locally.
+# JieLi's installer is downloaded, checked against a pinned SHA-256 and
+# unpacked with innoextract; it is never executed.
+name: Build Elite firmware
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TOOLCHAIN_URL: https://jl-update.oss-cn-shenzhen.aliyuncs.com/2.5.3.exe
+  TOOLCHAIN_SHA256: 399bd518a28e47a7a0394506cebd5bf658748a58cd6b7c02512e24b4b88c5a5e
+
+jobs:
+  elite:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/smk37-toolchain/2.5.3.exe
+          key: jieli-${{ env.TOOLCHAIN_SHA256 }}
+      - name: Fetch, verify and unpack the JieLi 2.5.3 toolchain
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:RUNNER_TEMP 'smk37-toolchain'
+          $exe = Join-Path $cache '2.5.3.exe'
+          if (!(Test-Path $exe)) {
+            New-Item -ItemType Directory -Force $cache | Out-Null
+            Invoke-WebRequest $env:TOOLCHAIN_URL -OutFile $exe
+          }
+          if ((Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant() -ne $env:TOOLCHAIN_SHA256) { throw 'The toolchain installer is not the expected file.' }
+          choco install innoextract --no-progress -y
+          innoextract -s -d (Join-Path $cache 'unpacked') $exe
+      - name: Build the Elite firmware
+        shell: powershell
+        run: ./sdk/Build.ps1 -Model elite -FirmwareOnly -Toolchain (Join-Path $env:RUNNER_TEMP 'smk37-toolchain/unpacked/C$/JL/pi32')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smk37-elite-firmware
+          path: |
+            build/elite/generated/
+            build/elite/*.json
+            build/elite/sdk.map
