@@ -2664,10 +2664,13 @@ controls_done:
     return 1;
 }
 
+int seqadv_m0_active(void);
+static void m0_frame(void);
 void groove_screen_control(void)
 {
     struct fm1_controls controls;
     fm1_controls_read(&controls);
+    if (seqadv_m0_active()) { m0_frame(); return; }
     if (shift_visible != smk37_shift()) {
         shift_visible = smk37_shift();
         saved_cache.shown_page = ~0U;
@@ -3208,3 +3211,4 @@ static void algorithm_draw(unsigned algorithm, unsigned muted)
         number(x + 8, y + 3, i + 1, 1, 1, muted & (1U << i) ? DIM : BACK, bg);
     }
 }
+#include "seqadv_m0.inc"

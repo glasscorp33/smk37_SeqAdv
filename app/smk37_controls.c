@@ -183,8 +183,10 @@ static void fader(unsigned id,unsigned value)
     }
 }
 
+int seqadv_m0_event(unsigned kind,unsigned id,int value);
 void smk37_control_event(unsigned kind,unsigned id,int value)
 {
+    if(seqadv_m0_event(kind,id,value))return;
     if(kind==SMK37_KEY && id<37) {
         if(!value)release(&held_notes[id]);
         else {
