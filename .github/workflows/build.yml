@@ -46,3 +46,20 @@ jobs:
             build/elite/generated/
             build/elite/*.json
             build/elite/sdk.map
+
+  simulator:
+    name: Browser simulator
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: build/tools
+          key: wasi-sdk-27-windows
+      - name: Build the browser preview (downloads and verifies WASI SDK 27 on first use)
+        shell: powershell
+        run: ./tools/Build-Web.ps1 -LocalPreview
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smk37-simulator
+          path: build/preview/

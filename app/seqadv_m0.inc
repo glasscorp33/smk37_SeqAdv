@@ -11,7 +11,13 @@
  *
  * Included at the end of screen.c to reuse its 5x7 font and band buffer.
  * Control task only. */
+#ifdef FM1_OPEN_WEB
+/* The browser simulator has no hardware counter: derive it from milliseconds. */
+static uint32_t m0_ticks(void) { return fm1_millis() * 24000U; }
+#else
 #include "fm1_device.h"
+static uint32_t m0_ticks(void) { return fm1_device_ticks(); }
+#endif
 
 enum { M0_LINES = 12, M0_COLUMNS = 20, M0_SCALE = 2, M0_ROW = 20 };
 static struct {
@@ -41,7 +47,7 @@ int seqadv_m0_event(unsigned kind, unsigned id, int value)
             smk37_controls_release();       /* no hanging notes in the instrument */
             memset(m0.shown, 0, sizeof m0.shown);
             m0.dirty_all = 1; m0.min_us = ~0U; m0.max_us = 0; m0.loops = 0;
-            m0.last_ticks = fm1_device_ticks(); m0.window_start = fm1_millis();
+            m0.last_ticks = m0_ticks(); m0.window_start = fm1_millis();
             m0.active = 1;
         } else {
             for (unsigned port = 0; port < 3; ++port) m0_note(port, 0);
@@ -98,7 +104,7 @@ static int m0_line(unsigned line, const char *s, uint16_t color)
 /* Called from groove_screen_control after the panel has been read. */
 static void m0_frame(void)
 {
-    uint32_t ticks = fm1_device_ticks(), now = fm1_millis();
+    uint32_t ticks = m0_ticks(), now = fm1_millis();
     uint32_t us = (ticks - m0.last_ticks) / 24U;       /* 24 MHz counter */
     m0.last_ticks = ticks;
     if (us < m0.min_us) m0.min_us = us;
