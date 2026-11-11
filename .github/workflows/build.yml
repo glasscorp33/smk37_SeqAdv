@@ -63,3 +63,38 @@ jobs:
         with:
           name: smk37-simulator
           path: build/preview/
+
+  installer:
+    name: Elite installer page
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/smk37-toolchain/2.5.3.exe
+          key: jieli-${{ env.TOOLCHAIN_SHA256 }}
+      - uses: actions/cache@v4
+        with:
+          path: build/tools
+          key: wasi-sdk-27-windows
+      - name: Fetch, verify and unpack the JieLi 2.5.3 toolchain
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:RUNNER_TEMP 'smk37-toolchain'
+          $exe = Join-Path $cache '2.5.3.exe'
+          if (!(Test-Path $exe)) {
+            New-Item -ItemType Directory -Force $cache | Out-Null
+            Invoke-WebRequest $env:TOOLCHAIN_URL -OutFile $exe
+          }
+          if ((Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant() -ne $env:TOOLCHAIN_SHA256) { throw 'The toolchain installer is not the expected file.' }
+          choco install innoextract --no-progress -y
+          innoextract -s -d (Join-Path $cache 'unpacked') $exe
+      - name: Build the offline workbench with this firmware embedded
+        shell: powershell
+        env:
+          FM1_SOURCE_URL: https://github.com/${{ github.repository }}/archive/${{ github.sha }}.zip
+        run: ./sdk/Build.ps1 -Model elite -Package -Toolchain (Join-Path $env:RUNNER_TEMP 'smk37-toolchain/unpacked/C$/JL/pi32')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smk37-elite-installer
+          path: build/official-web/elite/
