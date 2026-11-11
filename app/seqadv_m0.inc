@@ -28,6 +28,7 @@ struct seqadv_probe seqadv_probes[SEQADV_PROBES];
 volatile uint32_t seqadv_wake_time;
 volatile uint8_t seqadv_wake_armed, seqadv_wake_pending;
 struct seqadv_clock seqadv_clock;
+volatile uint8_t seqadv_stock_clock_off;
 
 enum { M0_LINES = 12, M0_COLUMNS = 20, M0_SCALE = 2, M0_ROW = 20 };
 static struct {
@@ -120,11 +121,11 @@ int seqadv_m0_event(unsigned kind, unsigned id, int value)
             memset(m0.shown, 0, sizeof m0.shown);
             m0.dirty_all = m0.clear = 1; m0.min_us = ~0U; m0.max_us = 0; m0.loops = 0;
             m0.last_ticks = m0_ticks(); m0.window_start = fm1_millis();
-            m0.active = 1;
+            m0.active = 1; seqadv_stock_clock_off = 1;
         } else {
             for (unsigned port = 0; port < 3; ++port) m0_note(port, 0);
             m0_clock_run(0);
-            m0.active = 0; seqadv_wake_armed = 0; m0.stress = 0;
+            m0.active = 0; seqadv_wake_armed = 0; m0.stress = 0; seqadv_stock_clock_off = 0;
             saved_cache.shown_page = ~0U;   /* stock page repaints in full */
         }
         return 1;

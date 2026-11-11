@@ -187,7 +187,7 @@ FM1_AUDIO_CODE void groove_midi_transport(unsigned owner, uint8_t status)
 }
 FM1_AUDIO_CODE void groove_midi_clock(unsigned owner, unsigned tempo)
 {
-    if (owner || !(config.flags & CLOCK_OUT) || groove_clock_mode()) return;
+    if (owner || !(config.flags & CLOCK_OUT) || groove_clock_mode() || seqadv_stock_clock_off) return;
     enum { PERIOD = FM1_SAMPLE_RATE * 60U };
     if (clock_first || clock_phase >= PERIOD) {
         if (!clock_first) clock_phase -= PERIOD;

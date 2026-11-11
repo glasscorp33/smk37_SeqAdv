@@ -21,6 +21,9 @@ struct seqadv_clock {
     volatile uint8_t running;
 };
 extern struct seqadv_clock seqadv_clock;
+/* Nonzero while the test page owns MIDI out: the stock engine otherwise
+ * sends its own MIDI clock on every port, all the time, at its own tempo. */
+extern volatile uint8_t seqadv_stock_clock_off;
 static inline __attribute__((always_inline)) int seqadv_clock_poll(uint32_t now)
 {
     struct seqadv_clock *c = &seqadv_clock;
