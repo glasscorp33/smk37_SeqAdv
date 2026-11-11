@@ -39,6 +39,46 @@ jobs:
       - name: Build the Elite firmware
         shell: powershell
         run: ./sdk/Build.ps1 -Model elite -FirmwareOnly -Toolchain (Join-Path $env:RUNNER_TEMP 'smk37-toolchain/unpacked/C$/JL/pi32')
+      # Artifacts are not always reachable: print size, heap and the largest
+      # contributors into the log. The packager limit is 453,921 app bytes.
+      - name: Report image size, heap and largest symbols
+        if: always()
+        shell: pwsh
+        run: |
+          $build = 'build/elite'
+          foreach ($name in 'firmware-report.json','build-identity.json','package-report.json') {
+            $path = Join-Path $build $name
+            if (Test-Path $path) { Write-Host "== $name"; Get-Content $path | ForEach-Object { Write-Host $_ } }
+          }
+          $nm = Join-Path $env:RUNNER_TEMP 'smk37-toolchain/unpacked/C$/JL/pi32/bin/llvm-nm.exe'
+          $elf = Join-Path $build 'sdk.elf'
+          if ((Test-Path $elf) -and (Test-Path $nm)) {
+            Write-Host '== 40 largest symbols (address size type name, decimal)'
+            & $nm --print-size --size-sort --radix=d $elf | Select-Object -Last 40 | ForEach-Object { Write-Host $_ }
+            Write-Host '== SeqAdv symbols'
+            & $nm --print-size --radix=d $elf | Where-Object { $_ -match 'seqadv|seq_|m0_|sq_' } | ForEach-Object { Write-Host $_ }
+          }
+          $map = Join-Path $build 'sdk.map'
+          if (Test-Path $map) {
+            $lines = [IO.File]::ReadAllLines($map)
+            Write-Host "== sdk.map: $($lines.Count) lines; first 25"
+            $lines | Select-Object -First 25 | ForEach-Object { Write-Host $_ }
+            # Sum input-section sizes per input file (GNU ld or lld map layout).
+            $sizes = @{}
+            $pending = $null
+            foreach ($line in $lines) {
+              if ($line -match '^\s*\.(text|data|rodata|ram0_data|cache_ram_data|bss)[\w.$]*\s*$') { $pending = $Matches[1]; continue }
+              if ($line -match '^\s*(\.(text|data|rodata|ram0_data|cache_ram_data|bss)[\w.$]*)?\s+0x([0-9a-fA-F]+)\s+0x([0-9a-fA-F]+)\s+(\S+\.(o|obj|a\([^)]*\)))\s*$') {
+                $kind = if ($Matches[2]) { $Matches[2] } else { $pending }
+                $pending = $null
+                if (!$kind) { continue }
+                $key = "$kind $($Matches[5])"
+                $sizes[$key] = [long]$sizes[$key] + [Convert]::ToInt64($Matches[4],16)
+              } else { $pending = $null }
+            }
+            Write-Host '== 30 largest input files by section (bytes section file)'
+            $sizes.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 30 | ForEach-Object { Write-Host ("{0,8} {1}" -f $_.Value, $_.Key) }
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: smk37-elite-firmware
