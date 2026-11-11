@@ -32,6 +32,7 @@ struct seqadv_clock seqadv_clock;
 enum { M0_LINES = 12, M0_COLUMNS = 20, M0_SCALE = 2, M0_ROW = 20 };
 static struct {
     uint8_t active, shift, dirty_all, page, clear, stress, note;
+    uint16_t dirty_lines;               /* one bit per text row still to draw */
     /* Clock test: lateness = send time - due time, in 24 MHz ticks. */
     uint32_t consumed, late_min, late_max, late_sum, late_count, late_peak, late_over, overruns, clock_errors;
     uint32_t shown_late_min, shown_late_max, shown_late_avg;
@@ -160,7 +161,7 @@ static char *m0_number(char *out, long value)
 /* Blocking draw of one text row. Returns 0 when the LCD is still busy. */
 static int m0_line(unsigned line, const char *s, uint16_t color)
 {
-    if (!m0.dirty_all && !strcmp(m0.shown[line], s)) return 1;
+    if (!(m0.dirty_lines & (1U << line)) && !strcmp(m0.shown[line], s)) return 1;
     if (fm1_screen_pending()) return 0;
     enum { W = FM1_SCREEN_WIDTH, H = 7 * M0_SCALE };
     for (unsigned i = 0; i < W * H; ++i) paint_pixels[i] = BACK;
@@ -184,6 +185,7 @@ static int m0_line(unsigned line, const char *s, uint16_t color)
      * fm1_screen_pending() reports completion, so one call stays short. */
     if (fm1_screen_submit(0, 4U + line * M0_ROW, W, H, paint_pixels, W * H)) return 0;
     strncpy(m0.shown[line], s, M0_COLUMNS); m0.shown[line][M0_COLUMNS] = 0;
+    m0.dirty_lines &= (uint16_t)~(1U << line);
     return 1;
 }
 
@@ -219,7 +221,9 @@ static void m0_frame(void)
         fm1_screen_fill(0, 0, FM1_SCREEN_WIDTH, FM1_SCREEN_HEIGHT, BACK);
         m0.clear = 0;
     }
-    if (m0.stress) m0.dirty_all = 1;
+    /* Rows are sent one at a time by DMA, so a full redraw spans several
+     * calls: remember which rows are still owed instead of restarting. */
+    if (m0.dirty_all) { m0.dirty_lines = 0xfffU; m0.dirty_all = 0; }
     static const char *const kinds[8] = {"BTN", "KEY", "PRS", "PAD", "ENC", "CMB", "PED", "FDR"};
     static char text_line[M0_LINES][40]; char *p; unsigned ok = 1;
     if (m0.page == 2) {
@@ -240,7 +244,7 @@ static void m0_frame(void)
             m0_clock_service();
             ok = (unsigned)m0_line(line, text_line[line], line == 0 ? ACCENT : line >= 10 ? DIM : TEXT);
         }
-        if (ok) m0.dirty_all = 0;
+        if (ok && m0.stress) m0.dirty_lines = 0xfffU;
         return;
     }
     if (m0.page) {
@@ -254,7 +258,7 @@ static void m0_frame(void)
         m0_put(text_line[11], "P15 WAKE  P16 PAGE");
         for (unsigned line = 0; line < M0_LINES && ok; ++line)
             ok = (unsigned)m0_line(line, text_line[line], line == 0 ? ACCENT : line == 11 ? DIM : (line & 1U) ? TEXT : DIM);
-        if (ok) m0.dirty_all = 0;
+        if (ok && m0.stress) m0.dirty_lines = 0xfffU;
         return;
     }
     m0_put(text_line[0], "SEQADV M0 TEST");
@@ -276,5 +280,5 @@ static void m0_frame(void)
     m0_put(text_line[11], "P16 TIMING PAGE");
     for (unsigned line = 0; line < M0_LINES && ok; ++line)
         ok = (unsigned)m0_line(line, text_line[line], line == 0 ? ACCENT : line == 11 ? DIM : TEXT);
-    if (ok) m0.dirty_all = 0;
+    if (ok && m0.stress) m0.dirty_lines = 0xfffU;
 }
