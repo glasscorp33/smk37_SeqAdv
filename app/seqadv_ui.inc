@@ -130,6 +130,7 @@ static void sq_live(unsigned key, unsigned velocity)
         sq.live_note[key] = SQ_NONE; --sq.live_down;
     }
     if (!velocity) return;
+    if (velocity > 127U) velocity = 127;    /* a data byte must stay below 0x80 */
     const struct seq_track *t = seq_track();
     uint8_t on[3] = {(uint8_t)(0x90 | t->channel), (uint8_t)(SQ_KEY_BASE + key), (uint8_t)velocity};
     sq_emit(t->ports, on, 3);
