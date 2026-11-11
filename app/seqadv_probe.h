@@ -17,6 +17,8 @@ extern volatile uint8_t seqadv_wake_armed, seqadv_wake_pending;
 struct seqadv_clock {
     volatile uint32_t next, period, rem, acc, bpm;
     volatile uint32_t produced;         /* ticks made by the interrupt */
+    volatile uint32_t consumed;         /* ticks sent by the control task */
+    volatile uint32_t requested, retries; /* last wake request; repeats */
     volatile uint32_t due[8];           /* due time of tick n at [n & 7] */
     volatile uint8_t phase[8];          /* what the control task was doing then */
     volatile uint8_t running;
@@ -31,7 +33,16 @@ extern volatile uint8_t seqadv_stock_clock_off;
 static inline __attribute__((always_inline)) int seqadv_clock_poll(uint32_t now)
 {
     struct seqadv_clock *c = &seqadv_clock;
-    if (!c->running || (int32_t)(now - c->next) < 0) return 0;
+    if (!c->running) return 0;
+    if ((int32_t)(now - c->next) < 0) {
+        /* A wake request can be missed. While ticks are waiting, ask again
+         * every 300 us instead of leaving them to the next tick or the
+         * 10 ms control period. */
+        if (c->produced == c->consumed || now - c->requested < 7200U) return 0;
+        c->requested = now; ++c->retries;
+        return 1;
+    }
+    c->requested = now;
     c->due[c->produced & 7U] = c->next;
     c->phase[c->produced & 7U] = seqadv_phase;
     ++c->produced;

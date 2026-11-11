@@ -36,7 +36,7 @@ static struct {
     uint8_t active, shift, dirty_all, page, clear, stress, note;
     uint16_t dirty_lines;               /* one bit per text row still to draw */
     /* Clock test: lateness = send time - due time, in 24 MHz ticks. */
-    uint32_t consumed, late_min, late_max, late_sum, late_count, late_peak, late_over, overruns, clock_errors;
+    uint32_t late_min, late_max, late_sum, late_count, late_peak, late_over, overruns, clock_errors;
     uint32_t shown_late_min, shown_late_max, shown_late_avg;
     uint32_t over_phase[3], phase_max[3];   /* late ticks by activity; longest read / draw */
     uint32_t probe_count[SEQADV_PROBES], probe_min[SEQADV_PROBES], probe_max[SEQADV_PROBES];
@@ -80,7 +80,7 @@ static void m0_clock_run(unsigned run)
         memset(m0.over_phase, 0, sizeof m0.over_phase); memset(m0.phase_max, 0, sizeof m0.phase_max);
         m0_send(&start, 1);
         uint32_t state = m0_lock();
-        seqadv_clock.produced = 0; m0.consumed = 0; seqadv_clock.acc = 0;
+        seqadv_clock.produced = 0; seqadv_clock.consumed = 0; seqadv_clock.acc = 0; seqadv_clock.retries = 0;
         seqadv_clock.next = m0_ticks() + seqadv_clock.period;
         seqadv_clock.running = 1;
         m0_unlock(state);
@@ -104,10 +104,10 @@ static uint32_t m0_phase(unsigned phase, uint32_t started)
  * every 4th tick (24 PPQN), a metronome note on channel 1 every beat. */
 static void m0_clock_service(void)
 {
-    while (seqadv_clock.running && m0.consumed != seqadv_clock.produced) {
-        uint32_t behind = seqadv_clock.produced - m0.consumed;
-        if (behind > 8U) { m0.overruns += behind - 8U; m0.consumed += behind - 8U; }
-        uint32_t tick = m0.consumed++;
+    while (seqadv_clock.running && seqadv_clock.consumed != seqadv_clock.produced) {
+        uint32_t behind = seqadv_clock.produced - seqadv_clock.consumed;
+        if (behind > 8U) { m0.overruns += behind - 8U; seqadv_clock.consumed += behind - 8U; }
+        uint32_t tick = seqadv_clock.consumed++;
         uint32_t late = m0_ticks() - seqadv_clock.due[tick & 7U];
         if (late < m0.late_min) m0.late_min = late;
         if (late > m0.late_max) m0.late_max = late;
@@ -242,7 +242,7 @@ static void m0_frame(void)
     if (m0.page == 2) {
         p = m0_put(text_line[0], "SEQADV M0 CLOCK");
         p = m0_put(text_line[1], seqadv_clock.running ? "RUN  BPM " : "STOP BPM "); m0_number(p, (long)seqadv_clock.bpm);
-        p = m0_put(text_line[2], "TICKS "); m0_number(p, (long)m0.consumed);
+        p = m0_put(text_line[2], "TICKS "); m0_number(p, (long)seqadv_clock.consumed);
         p = m0_put(text_line[3], "LATE MIN US "); m0_number(p, (long)m0.shown_late_min);
         p = m0_put(text_line[4], "LATE AVG US "); m0_number(p, (long)m0.shown_late_avg);
         p = m0_put(text_line[5], "LATE MAX US "); m0_number(p, (long)m0.shown_late_max);
@@ -255,7 +255,7 @@ static void m0_frame(void)
         p = m0_put(p, " DR "); m0_number(p, (long)(m0.phase_max[2] / 24U));
         p = m0_put(text_line[10], "LOST "); p = m0_number(p, (long)m0.overruns);
         p = m0_put(p, " ERR "); p = m0_number(p, (long)m0.clock_errors);
-        m0_put(p, m0.stress ? " STRESS" : "");
+        p = m0_put(p, " RT "); m0_number(p, (long)seqadv_clock.retries);
         m0_put(text_line[11], "P5 RUN P14 STR P16");
         for (unsigned line = 0; line < M0_LINES && ok; ++line) {
             m0_clock_service();
