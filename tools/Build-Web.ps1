@@ -124,12 +124,21 @@ $web = [IO.File]::ReadAllText((Join-Path $root 'sdk/Update.html.in'))
 if ($LocalPreview) {
     $web = [regex]::Replace($web, '<a\b[^>]*href="/\*FM1_SOURCE_URL\*/"[^>]*>(.*?)</a>', '<span>$1 (local preview)</span>')
 }
+# SeqAdv: a board that once ran Baud Girl SMK-37+VA retains that loader name
+# (ota-SMK-37+VA_101) in update mode. It names no hardware model, like the
+# shared loader, so the loader path still asks for physical-model confirmation.
+# Patched here, not in sdk/, so the firmware build identity stays unchanged.
+$updateScript = [IO.File]::ReadAllText((Join-Path $root 'sdk/WebUpdate.js'))
+$loaderRule = "identity.startsWith('ota-') && identityModel(identity.slice(4))===model;"
+if (!$updateScript.Contains($loaderRule)) { throw 'Loader identity rule not found in sdk/WebUpdate.js.' }
+$updateScript = $updateScript.Replace($loaderRule,
+    "identity.startsWith('ota-') && (identityModel(identity.slice(4))===model || /^ota-SMK-37\+VA_\d{1,6}$/.test(identity));")
 $replacements = @{
     '/*FM1_SOURCE_URL*/'=[Net.WebUtility]::HtmlEncode($sourceUrl)
     '/*FM1_PAYLOAD*/'=('const FM1_PACKAGE = ' + $(if ($PackageJson) { $PackageJson } else { 'null' }) + ';')
     '/*FM1_SIMULATOR*/'=('const FM1_SIMULATOR = ' + $simulation + ';')
     '/*FM1_I18N*/'=[IO.File]::ReadAllText((Join-Path $root 'sdk/I18n.js'))
-    '/*FM1_SCRIPT*/'=[IO.File]::ReadAllText((Join-Path $root 'sdk/WebUpdate.js'))
+    '/*FM1_SCRIPT*/'=$updateScript
     '/*FM1_SIM_SCRIPT*/'=[IO.File]::ReadAllText((Join-Path $root 'sdk/Simulator.js'))
     '/*FM1_SAMPLE_SCRIPT*/'=[IO.File]::ReadAllText((Join-Path $root 'sdk/Samples.js'))
 }

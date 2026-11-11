@@ -61,12 +61,7 @@
   const identityModel = value => /^(SMK-37 Pro_\d+|SMK37P_OPEN_\d{3})$/.test(value)?'pro':
     /^(SMK-37 Elite_\d+|SMK37E_OPEN_\d{3})$/.test(value)?'elite':undefined;
   const taggedLoader = pkg => 'ota-SMK37'+pkg.build_id.slice(0,16);
-  // SeqAdv: a board that once ran Baud Girl SMK-37+VA retains that loader name
-  // (ota-SMK-37+VA_101). It names no hardware model, like the shared loader:
-  // the loader path still requires physical-model confirmation before writing.
-  const retainedLoader = identity => /^ota-SMK-37\+VA_\d{1,6}$/.test(identity);
-  const modelLoader = (identity,model) => identity.startsWith('ota-') &&
-    (identityModel(identity.slice(4))===model || retainedLoader(identity));
+  const modelLoader = (identity,model) => identity.startsWith('ota-') && identityModel(identity.slice(4))===model;
   async function sha256(bytes) { return hex(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))); }
   // Official M-VAVE V016 downloads (2026-08-12), preserved byte-for-byte.
   const stockHashes={pro:'2d98ce72530e71d617384963423820536f094501299e2cfec0a8d3c3fb6bcfb0',
