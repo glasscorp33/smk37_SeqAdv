@@ -2,6 +2,7 @@
  * Pro/Elite matrix wiring, key contacts and Pad pressure scanning.
  * IRQs only scan and enqueue; FM1 control task owns all musical operations. */
 #include "smk37_hw.h"
+#include "seqadv_probe.h"
 
 static struct {u16 pad[16][5],key[37][5],pedal[5];} trim_vm_cfg;
 static const u16 keytrim_init[5]={5,640,800,920,980};
@@ -275,6 +276,7 @@ ___interrupt static void scan_soft_isr()
 {
     SMK_SOFT_CLEAR |= BIT(2);
     u32 started=fm1_device_ticks();
+    seqadv_probe_mark(SEQADV_SOFT,started);
     key_scan();
     encoder_scan();
     led_scan();
@@ -289,6 +291,15 @@ static inline FM1_AUDIO_CODE void usr_adc_start(u32 ch);
 
 ___interrupt static void scan_isr()
 {
+    {
+        const u32 now=fm1_device_ticks();
+        seqadv_probe_mark(SEQADV_SCAN,now);
+        /* M0 wake test, only while armed from the test page: every 100 ms
+         * stamp the time and ask for the control task. */
+        if(seqadv_wake_armed && !seqadv_wake_pending && now-seqadv_wake_time>2400000U) {
+            seqadv_wake_time=now;seqadv_wake_pending=1;fm1_control_request();
+        }
+    }
     if(adc_sta < 4 && adc_sta)
     {
         if(adc_sta == 3)

@@ -19,9 +19,15 @@ static uint32_t m0_ticks(void) { return fm1_millis() * 24000U; }
 static uint32_t m0_ticks(void) { return fm1_device_ticks(); }
 #endif
 
+#include "seqadv_probe.h"
+struct seqadv_probe seqadv_probes[SEQADV_PROBES];
+volatile uint32_t seqadv_wake_time;
+volatile uint8_t seqadv_wake_armed, seqadv_wake_pending;
+
 enum { M0_LINES = 12, M0_COLUMNS = 20, M0_SCALE = 2, M0_ROW = 20 };
 static struct {
-    uint8_t active, shift, dirty_all;
+    uint8_t active, shift, dirty_all, page;
+    uint32_t probe_count[SEQADV_PROBES], probe_min[SEQADV_PROBES], probe_max[SEQADV_PROBES];
     uint8_t kind, id; int16_t value; uint32_t events;
     uint16_t sent[3], failed[3];
     uint32_t last_ticks, window_start;
@@ -51,7 +57,7 @@ int seqadv_m0_event(unsigned kind, unsigned id, int value)
             m0.active = 1;
         } else {
             for (unsigned port = 0; port < 3; ++port) m0_note(port, 0);
-            m0.active = 0;
+            m0.active = 0; seqadv_wake_armed = 0;
             saved_cache.shown_page = ~0U;   /* stock page repaints in full */
         }
         return 1;
@@ -59,6 +65,10 @@ int seqadv_m0_event(unsigned kind, unsigned id, int value)
     if (!m0.active) return 0;
     m0.kind = (uint8_t)kind; m0.id = (uint8_t)id; m0.value = (int16_t)value; ++m0.events;
     if (kind == SMK37_PAD && id < 3) m0_note(id, value != 0);
+    /* Pad 16 switches between the port page and the timing page. Holding
+     * pad 15 arms the wake test (interrupt -> control task latency). */
+    if (kind == SMK37_PAD && id == 15 && value) { m0.page ^= 1U; m0.dirty_all = 1; }
+    if (kind == SMK37_PAD && id == 14) seqadv_wake_armed = value != 0;
     return 1;
 }
 
@@ -105,6 +115,10 @@ static int m0_line(unsigned line, const char *s, uint16_t color)
 static void m0_frame(void)
 {
     uint32_t ticks = m0_ticks(), now = fm1_millis();
+    if (seqadv_wake_pending) {
+        seqadv_probe_interval(SEQADV_WAKE, ticks - seqadv_wake_time);
+        seqadv_wake_pending = 0;
+    }
     uint32_t us = (ticks - m0.last_ticks) / 24U;       /* 24 MHz counter */
     m0.last_ticks = ticks;
     if (us < m0.min_us) m0.min_us = us;
@@ -113,6 +127,11 @@ static void m0_frame(void)
     if (now - m0.window_start >= 1000U) {
         m0.shown_min_us = m0.min_us; m0.shown_max_us = m0.max_us; m0.shown_loops = m0.loops;
         m0.min_us = ~0U; m0.max_us = 0; m0.loops = 0; m0.window_start = now;
+        for (unsigned i = 0; i < SEQADV_PROBES; ++i) {
+            struct seqadv_probe *probe = &seqadv_probes[i];
+            m0.probe_count[i] = probe->count; m0.probe_min[i] = probe->count ? probe->min / 24U : 0; m0.probe_max[i] = probe->max / 24U;
+            probe->count = 0; probe->min = ~0U; probe->max = 0;
+        }
     }
     if (m0.dirty_all) {
         if (fm1_screen_pending()) return;
@@ -120,6 +139,20 @@ static void m0_frame(void)
     }
     static const char *const kinds[8] = {"BTN", "KEY", "PRS", "PAD", "ENC", "CMB", "PED", "FDR"};
     static char text_line[M0_LINES][40]; char *p; unsigned ok = 1;
+    if (m0.page) {
+        static const char *const names[SEQADV_PROBES] = {"SCAN/S ", "SOFT/S ", "AUDIO/S ", "POLL/S ", "WAKE/S "};
+        m0_put(text_line[0], "SEQADV M0 TIMING");
+        for (unsigned i = 0; i < SEQADV_PROBES; ++i) {
+            p = m0_put(text_line[1 + 2 * i], names[i]); m0_number(p, (long)m0.probe_count[i]);
+            p = m0_put(text_line[2 + 2 * i], " US "); p = m0_number(p, (long)m0.probe_min[i]);
+            *p++ = '-'; m0_number(p, (long)m0.probe_max[i]);
+        }
+        m0_put(text_line[11], "P15 WAKE  P16 PAGE");
+        for (unsigned line = 0; line < M0_LINES && ok; ++line)
+            ok = (unsigned)m0_line(line, text_line[line], line == 0 ? ACCENT : line == 11 ? DIM : (line & 1U) ? TEXT : DIM);
+        if (ok) m0.dirty_all = 0;
+        return;
+    }
     m0_put(text_line[0], "SEQADV M0 TEST");
     p = m0_put(text_line[1], "LAST "); p = m0_put(p, m0.events ? kinds[m0.kind & 7U] : "---");
     *p++ = ' '; p = m0_number(p, m0.id); *p++ = ' '; m0_number(p, m0.value);
@@ -136,7 +169,7 @@ static void m0_frame(void)
         p = m0_put(p, ports[port]); p = m0_number(p, m0.sent[port]);
         p = m0_put(p, " ERR "); m0_number(p, m0.failed[port]);
     }
-    m0_put(text_line[11], "SHIFT+TOP KEY EXIT");
+    m0_put(text_line[11], "P16 TIMING PAGE");
     for (unsigned line = 0; line < M0_LINES && ok; ++line)
         ok = (unsigned)m0_line(line, text_line[line], line == 0 ? ACCENT : line == 11 ? DIM : TEXT);
     if (ok) m0.dirty_all = 0;
