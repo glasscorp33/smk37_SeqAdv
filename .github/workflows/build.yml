@@ -53,8 +53,11 @@ jobs:
           $nm = Join-Path $env:RUNNER_TEMP 'smk37-toolchain/unpacked/C$/JL/pi32/bin/llvm-nm.exe'
           $elf = Join-Path $build 'sdk.elf'
           if ((Test-Path $elf) -and (Test-Path $nm)) {
-            Write-Host '== 40 largest symbols (address size type name, decimal)'
-            & $nm --print-size --size-sort --radix=d $elf | Select-Object -Last 40 | ForEach-Object { Write-Host $_ }
+            $all = & $nm --print-size --size-sort --radix=d $elf
+            Write-Host '== 50 largest symbols stored in the image (address size type name, decimal; no bss)'
+            $all | Where-Object { $_ -notmatch ' [bB] ' } | Select-Object -Last 50 | ForEach-Object { Write-Host $_ }
+            Write-Host '== 15 largest RAM-only (bss) symbols'
+            $all | Where-Object { $_ -match ' [bB] ' } | Select-Object -Last 15 | ForEach-Object { Write-Host $_ }
             Write-Host '== SeqAdv symbols'
             & $nm --print-size --radix=d $elf | Where-Object { $_ -match 'seqadv|seq_|m0_|sq_' } | ForEach-Object { Write-Host $_ }
           }
@@ -86,6 +89,20 @@ jobs:
             build/elite/generated/
             build/elite/*.json
             build/elite/sdk.map
+
+  host-tests:
+    name: Sequencer engine host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run tests/seqadv (plain, then with ASan/UBSan)
+        run: |
+          cc --version | head -1
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Iapp tests/seqadv/test_seq.c app/seqadv_seq.c -o test_seq
+          ./test_seq
+          cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all \
+            -Iapp tests/seqadv/test_seq.c app/seqadv_seq.c -o test_seq_sanitized
+          ./test_seq_sanitized
 
   simulator:
     name: Browser simulator
