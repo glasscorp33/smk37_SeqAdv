@@ -4,7 +4,6 @@
 #include "fm1_engine_control.h"
 #include "audio_output.h"
 #include <string.h>
-#include "seqadv_probe.h"
 
 #define DMA_ALIGNED __attribute__((aligned(32)))
 static int32_t receive[2][FM1_BLOCK_WORDS] DMA_ALIGNED;
@@ -32,7 +31,6 @@ FM1_AUDIO_CODE __attribute__((interrupt(""))) void fm1_audio_irq(void)
     uint32_t start = FM1_AUDIO_TIMER_COUNT, interval, used;
     unsigned half, committed = 0;
     fm1_audio_ack(pending);
-    if (rx) seqadv_probe_mark(SEQADV_AUDIO, *(volatile uint32_t *)0x10804U); /* 24 MHz counter */
     if (!rx || mute_depth) return;
     if (!previous_valid) { previous_tick = start; previous_valid = 1; return; }
     interval = elapsed(previous_tick, start);

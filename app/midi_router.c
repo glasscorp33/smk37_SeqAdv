@@ -2,10 +2,7 @@
 #include "instrument.h"
 #include "fm1_engine_control.h"
 #include <string.h>
-#ifndef FM1_HOST_TEST
-#include "fm1_device.h"
-#endif
-#include "seqadv_probe.h"
+#include "seqadv_clock.h"
 #ifdef FM1_HOST_TEST
 #include <stdatomic.h>
 #define WORD _Atomic(unsigned)
@@ -265,9 +262,6 @@ static void release_owner(unsigned owner, unsigned ports)
 }
 void groove_midi_poll(void)
 {
-#ifndef FM1_HOST_TEST
-    seqadv_probe_mark(SEQADV_POLL, fm1_device_ticks());
-#endif
     unsigned ready = fm1_midi_ready_ports();
     for (unsigned p = 0; p < 3; ++p) {
         if ((ready_seen & ~ready) & (1U << p)) recover(p);

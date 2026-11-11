@@ -183,10 +183,12 @@ static void fader(unsigned id,unsigned value)
     }
 }
 
-int seqadv_m0_event(unsigned kind,unsigned id,int value);
+int seqadv_event(unsigned kind,unsigned id,int value);
+int seqadv_active(void);
+uint32_t seqadv_pad_color(unsigned pad);
 void smk37_control_event(unsigned kind,unsigned id,int value)
 {
-    if(seqadv_m0_event(kind,id,value))return;
+    if(seqadv_event(kind,id,value))return;
     if(kind==SMK37_KEY && id<37) {
         if(!value)release(&held_notes[id]);
         else {
@@ -316,6 +318,7 @@ unsigned smk37_pad_aftertouch(void)
 { return channel_pressure[groove_midi_input_channel(smk37_performance_track(1))]; }
 uint32_t smk37_pad_color(unsigned pad,unsigned lit)
 {
+    if(seqadv_active())return seqadv_pad_color(pad);
     if(smk37_shift()) {
         if(pad<8)return pad==smk37_screen_track()?0x183030:0x041010;
         if(groove_track_role(pad-8)==GROOVE_TRACK_OFF)return 0x040404;
