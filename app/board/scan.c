@@ -299,6 +299,7 @@ ___interrupt static void scan_isr()
         if(seqadv_wake_armed && !seqadv_wake_pending && now-seqadv_wake_time>2400000U) {
             seqadv_wake_time=now;seqadv_wake_pending=1;fm1_control_request();
         }
+        if(seqadv_clock_poll(now))fm1_control_request();
     }
     if(adc_sta < 4 && adc_sta)
     {

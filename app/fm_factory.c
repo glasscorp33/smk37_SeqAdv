@@ -7,7 +7,7 @@
 FM1_DSP_CODE void groove_fm_factory(uint8_t patch[156], unsigned program)
 {
     uint8_t raw[128], stack[FACTORY_STACK];
-    unsigned voice=program%64U /* SeqAdv M0: bank truncated to 64 voices */, out=0;
+    unsigned voice=program%32U /* SeqAdv M0: bank truncated to 32 voices */, out=0;
     for(unsigned i=factory_offsets[voice];i<factory_offsets[voice+1];++i) {
         unsigned depth=0;stack[depth++]=factory_tokens[i];
         do {

@@ -11,6 +11,27 @@ extern struct seqadv_probe seqadv_probes[SEQADV_PROBES];
 /* Wake test: an interrupt stamps the time and requests the control task. */
 extern volatile uint32_t seqadv_wake_time;
 extern volatile uint8_t seqadv_wake_armed, seqadv_wake_pending;
+/* M0 clock: 96 PPQN tick deadlines in 24 MHz counter ticks. The scan
+ * interrupt (about 240 kHz) compares the counter with `next`, records the
+ * due time and requests the control task, which sends the MIDI. */
+struct seqadv_clock {
+    volatile uint32_t next, period, rem, acc, bpm;
+    volatile uint32_t produced;         /* ticks made by the interrupt */
+    volatile uint32_t due[8];           /* due time of tick n at [n & 7] */
+    volatile uint8_t running;
+};
+extern struct seqadv_clock seqadv_clock;
+static inline __attribute__((always_inline)) int seqadv_clock_poll(uint32_t now)
+{
+    struct seqadv_clock *c = &seqadv_clock;
+    if (!c->running || (int32_t)(now - c->next) < 0) return 0;
+    c->due[c->produced & 7U] = c->next;
+    ++c->produced;
+    c->next += c->period;
+    c->acc += c->rem;
+    if (c->acc >= c->bpm) { c->acc -= c->bpm; ++c->next; }
+    return 1;
+}
 static inline __attribute__((always_inline)) void seqadv_probe_interval(unsigned index, uint32_t interval)
 {
     struct seqadv_probe *p = &seqadv_probes[index];

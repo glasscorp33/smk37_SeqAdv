@@ -2666,9 +2666,11 @@ controls_done:
 
 int seqadv_m0_active(void);
 static void m0_frame(void);
+static void m0_clock_service(void);
 void groove_screen_control(void)
 {
     struct fm1_controls controls;
+    m0_clock_service();             /* due ticks go out before any panel work */
     fm1_controls_read(&controls);
     if (seqadv_m0_active()) { m0_frame(); return; }
     if (shift_visible != smk37_shift()) {

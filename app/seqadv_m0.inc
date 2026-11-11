@@ -14,19 +14,27 @@
 #ifdef FM1_OPEN_WEB
 /* The browser simulator has no hardware counter: derive it from milliseconds. */
 static uint32_t m0_ticks(void) { return fm1_millis() * 24000U; }
+static uint32_t m0_lock(void) { return 0; }
+static void m0_unlock(uint32_t state) { (void)state; }
 #else
 #include "fm1_device.h"
 static uint32_t m0_ticks(void) { return fm1_device_ticks(); }
+static uint32_t m0_lock(void) { return fm1_device_irq_save(); }
+static void m0_unlock(uint32_t state) { fm1_device_irq_restore(state); }
 #endif
 
 #include "seqadv_probe.h"
 struct seqadv_probe seqadv_probes[SEQADV_PROBES];
 volatile uint32_t seqadv_wake_time;
 volatile uint8_t seqadv_wake_armed, seqadv_wake_pending;
+struct seqadv_clock seqadv_clock;
 
 enum { M0_LINES = 12, M0_COLUMNS = 20, M0_SCALE = 2, M0_ROW = 20 };
 static struct {
-    uint8_t active, shift, dirty_all, page;
+    uint8_t active, shift, dirty_all, page, clear, stress, note;
+    /* Clock test: lateness = send time - due time, in 24 MHz ticks. */
+    uint32_t consumed, late_min, late_max, late_sum, late_count, late_peak, late_over, overruns, clock_errors;
+    uint32_t shown_late_min, shown_late_max, shown_late_avg;
     uint32_t probe_count[SEQADV_PROBES], probe_min[SEQADV_PROBES], probe_max[SEQADV_PROBES];
     uint8_t kind, id; int16_t value; uint32_t events;
     uint16_t sent[3], failed[3];
@@ -44,6 +52,63 @@ static void m0_note(unsigned port, unsigned on)
     else if (on) ++m0.failed[port];
 }
 
+static void m0_send(const uint8_t *message, size_t bytes)
+{
+    /* DIN and USB; a full queue is counted, never retried late. */
+    for (unsigned port = 0; port < 2; ++port)
+        if (fm1_midi_send_port(port, message, bytes) != 0 && port == 0) ++m0.clock_errors;
+}
+static void m0_clock_tempo(unsigned bpm)
+{
+    /* 96 PPQN: 24 MHz * 60 / (bpm * 96) = 15,000,000 / bpm counter ticks. */
+    uint32_t state = m0_lock();
+    seqadv_clock.bpm = bpm; seqadv_clock.period = 15000000U / bpm; seqadv_clock.rem = 15000000U % bpm;
+    seqadv_clock.acc = 0;
+    m0_unlock(state);
+}
+static void m0_clock_run(unsigned run)
+{
+    if (!seqadv_clock.bpm) m0_clock_tempo(120);
+    if (run && !seqadv_clock.running) {
+        const uint8_t start = 0xfa;
+        m0.late_min = ~0U; m0.late_max = m0.late_sum = m0.late_count = 0;
+        m0.late_peak = m0.late_over = m0.overruns = m0.clock_errors = 0;
+        m0_send(&start, 1);
+        uint32_t state = m0_lock();
+        seqadv_clock.produced = 0; m0.consumed = 0; seqadv_clock.acc = 0;
+        seqadv_clock.next = m0_ticks() + seqadv_clock.period;
+        seqadv_clock.running = 1;
+        m0_unlock(state);
+    } else if (!run && seqadv_clock.running) {
+        const uint8_t stop = 0xfc;
+        seqadv_clock.running = 0;
+        if (m0.note) { uint8_t off[3] = {0x80, m0.note, 0}; m0_send(off, 3); m0.note = 0; }
+        m0_send(&stop, 1);
+    }
+}
+/* Control task, first thing on every wake: send what is due. MIDI clock on
+ * every 4th tick (24 PPQN), a metronome note on channel 1 every beat. */
+static void m0_clock_service(void)
+{
+    while (seqadv_clock.running && m0.consumed != seqadv_clock.produced) {
+        uint32_t behind = seqadv_clock.produced - m0.consumed;
+        if (behind > 8U) { m0.overruns += behind - 8U; m0.consumed += behind - 8U; }
+        uint32_t tick = m0.consumed++;
+        uint32_t late = m0_ticks() - seqadv_clock.due[tick & 7U];
+        if (late < m0.late_min) m0.late_min = late;
+        if (late > m0.late_max) m0.late_max = late;
+        if (late > m0.late_peak) m0.late_peak = late;
+        if (late > 24000U) ++m0.late_over;
+        m0.late_sum += late; ++m0.late_count;
+        if (tick % 96U == 24U && m0.note) { uint8_t off[3] = {0x80, m0.note, 0}; m0_send(off, 3); m0.note = 0; }
+        if (tick % 4U == 0) { const uint8_t clock = 0xf8; m0_send(&clock, 1); }
+        if (tick % 96U == 0) {
+            m0.note = (uint8_t)(tick % 384U == 0 ? 72 : 60);
+            uint8_t on[3] = {0x90, m0.note, 100}; m0_send(on, 3);
+        }
+    }
+}
+
 /* Called first by smk37_control_event. Returns 1 when the event is consumed. */
 int seqadv_m0_event(unsigned kind, unsigned id, int value)
 {
@@ -52,23 +117,32 @@ int seqadv_m0_event(unsigned kind, unsigned id, int value)
         if (!m0.active) {
             smk37_controls_release();       /* no hanging notes in the instrument */
             memset(m0.shown, 0, sizeof m0.shown);
-            m0.dirty_all = 1; m0.min_us = ~0U; m0.max_us = 0; m0.loops = 0;
+            m0.dirty_all = m0.clear = 1; m0.min_us = ~0U; m0.max_us = 0; m0.loops = 0;
             m0.last_ticks = m0_ticks(); m0.window_start = fm1_millis();
             m0.active = 1;
         } else {
             for (unsigned port = 0; port < 3; ++port) m0_note(port, 0);
-            m0.active = 0; seqadv_wake_armed = 0;
+            m0_clock_run(0);
+            m0.active = 0; seqadv_wake_armed = 0; m0.stress = 0;
             saved_cache.shown_page = ~0U;   /* stock page repaints in full */
         }
         return 1;
     }
     if (!m0.active) return 0;
     m0.kind = (uint8_t)kind; m0.id = (uint8_t)id; m0.value = (int16_t)value; ++m0.events;
-    if (kind == SMK37_PAD && id < 3) m0_note(id, value != 0);
-    /* Pad 16 switches between the port page and the timing page. Holding
-     * pad 15 arms the wake test (interrupt -> control task latency). */
-    if (kind == SMK37_PAD && id == 15 && value) { m0.page ^= 1U; m0.dirty_all = 1; }
+    if (kind == SMK37_PAD && id < 3 && m0.page == 0) m0_note(id, value != 0);
+    /* Pad 16 cycles the pages: ports, timing, clock. Holding pad 15 arms the
+     * wake test. Pad 5 starts and stops the clock, holding pad 14 forces
+     * continuous screen redraws, any encoder sets the tempo. */
+    if (kind == SMK37_PAD && id == 15 && value) { m0.page = (uint8_t)((m0.page + 1U) % 3U); m0.dirty_all = 1; }
     if (kind == SMK37_PAD && id == 14) seqadv_wake_armed = value != 0;
+    if (kind == SMK37_PAD && id == 13) m0.stress = value != 0;
+    if (kind == SMK37_PAD && id == 4 && value) m0_clock_run(!seqadv_clock.running);
+    if (kind == SMK37_ENCODER && value) {
+        if (!seqadv_clock.bpm) m0_clock_tempo(120);
+        int bpm = (int)seqadv_clock.bpm + value;
+        m0_clock_tempo((unsigned)(bpm < 30 ? 30 : bpm > 300 ? 300 : bpm));
+    }
     return 1;
 }
 
@@ -106,7 +180,9 @@ static int m0_line(unsigned line, const char *s, uint16_t color)
                 if (shape[col / M0_SCALE] & (1U << (row / M0_SCALE)))
                     paint_pixels[row * W + x + col] = color;
     }
-    if (fm1_screen_blit(0, 4U + line * M0_ROW, W, H, paint_pixels, W * H)) return 0;
+    /* Asynchronous DMA: returns at once and borrows the buffer until
+     * fm1_screen_pending() reports completion, so one call stays short. */
+    if (fm1_screen_submit(0, 4U + line * M0_ROW, W, H, paint_pixels, W * H)) return 0;
     strncpy(m0.shown[line], s, M0_COLUMNS); m0.shown[line][M0_COLUMNS] = 0;
     return 1;
 }
@@ -132,13 +208,41 @@ static void m0_frame(void)
             m0.probe_count[i] = probe->count; m0.probe_min[i] = probe->count ? probe->min / 24U : 0; m0.probe_max[i] = probe->max / 24U;
             probe->count = 0; probe->min = ~0U; probe->max = 0;
         }
+        if (m0.late_count) {
+            m0.shown_late_min = m0.late_min / 24U; m0.shown_late_max = m0.late_max / 24U;
+            m0.shown_late_avg = m0.late_sum / m0.late_count / 24U;
+            m0.late_min = ~0U; m0.late_max = m0.late_sum = m0.late_count = 0;
+        }
     }
-    if (m0.dirty_all) {
+    if (m0.clear) {
         if (fm1_screen_pending()) return;
         fm1_screen_fill(0, 0, FM1_SCREEN_WIDTH, FM1_SCREEN_HEIGHT, BACK);
+        m0.clear = 0;
     }
+    if (m0.stress) m0.dirty_all = 1;
     static const char *const kinds[8] = {"BTN", "KEY", "PRS", "PAD", "ENC", "CMB", "PED", "FDR"};
     static char text_line[M0_LINES][40]; char *p; unsigned ok = 1;
+    if (m0.page == 2) {
+        p = m0_put(text_line[0], "SEQADV M0 CLOCK");
+        p = m0_put(text_line[1], seqadv_clock.running ? "RUN  BPM " : "STOP BPM "); m0_number(p, (long)seqadv_clock.bpm);
+        p = m0_put(text_line[2], "TICKS "); m0_number(p, (long)m0.consumed);
+        p = m0_put(text_line[3], "LATE MIN US "); m0_number(p, (long)m0.shown_late_min);
+        p = m0_put(text_line[4], "LATE AVG US "); m0_number(p, (long)m0.shown_late_avg);
+        p = m0_put(text_line[5], "LATE MAX US "); m0_number(p, (long)m0.shown_late_max);
+        p = m0_put(text_line[6], "PEAK US "); m0_number(p, (long)(m0.late_peak / 24U));
+        p = m0_put(text_line[7], "OVER 1MS "); m0_number(p, (long)m0.late_over);
+        p = m0_put(text_line[8], "LOST "); p = m0_number(p, (long)m0.overruns);
+        p = m0_put(p, " ERR "); m0_number(p, (long)m0.clock_errors);
+        m0_put(text_line[9], m0.stress ? "REDRAW STRESS ON" : "");
+        m0_put(text_line[10], "P5 RUN  P14 STRESS");
+        m0_put(text_line[11], "KNOB BPM  P16 PAGE");
+        for (unsigned line = 0; line < M0_LINES && ok; ++line) {
+            m0_clock_service();
+            ok = (unsigned)m0_line(line, text_line[line], line == 0 ? ACCENT : line >= 10 ? DIM : TEXT);
+        }
+        if (ok) m0.dirty_all = 0;
+        return;
+    }
     if (m0.page) {
         static const char *const names[SEQADV_PROBES] = {"SCAN/S ", "SOFT/S ", "AUDIO/S ", "POLL/S ", "WAKE/S "};
         m0_put(text_line[0], "SEQADV M0 TIMING");
