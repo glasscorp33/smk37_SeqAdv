@@ -18,9 +18,13 @@ struct seqadv_clock {
     volatile uint32_t next, period, rem, acc, bpm;
     volatile uint32_t produced;         /* ticks made by the interrupt */
     volatile uint32_t due[8];           /* due time of tick n at [n & 7] */
+    volatile uint8_t phase[8];          /* what the control task was doing then */
     volatile uint8_t running;
 };
 extern struct seqadv_clock seqadv_clock;
+/* Control task activity, sampled by the interrupt when a tick falls due:
+ * 0 outside the screen callback, 1 reading the panel, 2 drawing. */
+extern volatile uint8_t seqadv_phase;
 /* Nonzero while the test page owns MIDI out: the stock engine otherwise
  * sends its own MIDI clock on every port, all the time, at its own tempo. */
 extern volatile uint8_t seqadv_stock_clock_off;
@@ -29,6 +33,7 @@ static inline __attribute__((always_inline)) int seqadv_clock_poll(uint32_t now)
     struct seqadv_clock *c = &seqadv_clock;
     if (!c->running || (int32_t)(now - c->next) < 0) return 0;
     c->due[c->produced & 7U] = c->next;
+    c->phase[c->produced & 7U] = seqadv_phase;
     ++c->produced;
     c->next += c->period;
     c->acc += c->rem;

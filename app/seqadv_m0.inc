@@ -29,6 +29,7 @@ volatile uint32_t seqadv_wake_time;
 volatile uint8_t seqadv_wake_armed, seqadv_wake_pending;
 struct seqadv_clock seqadv_clock;
 volatile uint8_t seqadv_stock_clock_off;
+volatile uint8_t seqadv_phase;
 
 enum { M0_LINES = 12, M0_COLUMNS = 20, M0_SCALE = 2, M0_ROW = 20 };
 static struct {
@@ -37,6 +38,7 @@ static struct {
     /* Clock test: lateness = send time - due time, in 24 MHz ticks. */
     uint32_t consumed, late_min, late_max, late_sum, late_count, late_peak, late_over, overruns, clock_errors;
     uint32_t shown_late_min, shown_late_max, shown_late_avg;
+    uint32_t over_phase[3], phase_max[3];   /* late ticks by activity; longest read / draw */
     uint32_t probe_count[SEQADV_PROBES], probe_min[SEQADV_PROBES], probe_max[SEQADV_PROBES];
     uint8_t kind, id; int16_t value; uint32_t events;
     uint16_t sent[3], failed[3];
@@ -75,6 +77,7 @@ static void m0_clock_run(unsigned run)
         const uint8_t start = 0xfa;
         m0.late_min = ~0U; m0.late_max = m0.late_sum = m0.late_count = 0;
         m0.late_peak = m0.late_over = m0.overruns = m0.clock_errors = 0;
+        memset(m0.over_phase, 0, sizeof m0.over_phase); memset(m0.phase_max, 0, sizeof m0.phase_max);
         m0_send(&start, 1);
         uint32_t state = m0_lock();
         seqadv_clock.produced = 0; m0.consumed = 0; seqadv_clock.acc = 0;
@@ -88,6 +91,15 @@ static void m0_clock_run(unsigned run)
         m0_send(&stop, 1);
     }
 }
+/* Enter an activity phase; returns the time, and records how long the
+ * previous phase (1 panel read, 2 draw) lasted. */
+static uint32_t m0_phase(unsigned phase, uint32_t started)
+{
+    uint32_t now = m0_ticks(), previous = seqadv_phase;
+    if (previous && seqadv_clock.running && now - started > m0.phase_max[previous]) m0.phase_max[previous] = now - started;
+    seqadv_phase = (uint8_t)phase;
+    return now;
+}
 /* Control task, first thing on every wake: send what is due. MIDI clock on
  * every 4th tick (24 PPQN), a metronome note on channel 1 every beat. */
 static void m0_clock_service(void)
@@ -100,7 +112,7 @@ static void m0_clock_service(void)
         if (late < m0.late_min) m0.late_min = late;
         if (late > m0.late_max) m0.late_max = late;
         if (late > m0.late_peak) m0.late_peak = late;
-        if (late > 24000U) ++m0.late_over;
+        if (late > 24000U) { ++m0.late_over; ++m0.over_phase[seqadv_clock.phase[tick & 7U] % 3U]; }
         m0.late_sum += late; ++m0.late_count;
         if (tick % 96U == 24U && m0.note) { uint8_t off[3] = {0x80, m0.note, 0}; m0_send(off, 3); m0.note = 0; }
         if (tick % 4U == 0) { const uint8_t clock = 0xf8; m0_send(&clock, 1); }
@@ -236,11 +248,15 @@ static void m0_frame(void)
         p = m0_put(text_line[5], "LATE MAX US "); m0_number(p, (long)m0.shown_late_max);
         p = m0_put(text_line[6], "PEAK US "); m0_number(p, (long)(m0.late_peak / 24U));
         p = m0_put(text_line[7], "OVER 1MS "); m0_number(p, (long)m0.late_over);
-        p = m0_put(text_line[8], "LOST "); p = m0_number(p, (long)m0.overruns);
-        p = m0_put(p, " ERR "); m0_number(p, (long)m0.clock_errors);
-        m0_put(text_line[9], m0.stress ? "REDRAW STRESS ON" : "");
-        m0_put(text_line[10], "P5 RUN  P14 STRESS");
-        m0_put(text_line[11], "KNOB BPM  P16 PAGE");
+        p = m0_put(text_line[8], "OUT "); p = m0_number(p, (long)m0.over_phase[0]);
+        p = m0_put(p, " RD "); p = m0_number(p, (long)m0.over_phase[1]);
+        p = m0_put(p, " DRW "); m0_number(p, (long)m0.over_phase[2]);
+        p = m0_put(text_line[9], "MAX RD "); p = m0_number(p, (long)(m0.phase_max[1] / 24U));
+        p = m0_put(p, " DR "); m0_number(p, (long)(m0.phase_max[2] / 24U));
+        p = m0_put(text_line[10], "LOST "); p = m0_number(p, (long)m0.overruns);
+        p = m0_put(p, " ERR "); p = m0_number(p, (long)m0.clock_errors);
+        m0_put(p, m0.stress ? " STRESS" : "");
+        m0_put(text_line[11], "P5 RUN P14 STR P16");
         for (unsigned line = 0; line < M0_LINES && ok; ++line) {
             m0_clock_service();
             ok = (unsigned)m0_line(line, text_line[line], line == 0 ? ACCENT : line >= 10 ? DIM : TEXT);

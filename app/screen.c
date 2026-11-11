@@ -2667,12 +2667,20 @@ controls_done:
 int seqadv_m0_active(void);
 static void m0_frame(void);
 static void m0_clock_service(void);
+static uint32_t m0_phase(unsigned phase, uint32_t started);
 void groove_screen_control(void)
 {
     struct fm1_controls controls;
     m0_clock_service();             /* due ticks go out before any panel work */
+    if (seqadv_m0_active()) {
+        uint32_t started = m0_phase(1, 0);
+        fm1_controls_read(&controls);
+        started = m0_phase(2, started);
+        m0_frame();
+        m0_phase(0, started);
+        return;
+    }
     fm1_controls_read(&controls);
-    if (seqadv_m0_active()) { m0_frame(); return; }
     if (shift_visible != smk37_shift()) {
         shift_visible = smk37_shift();
         saved_cache.shown_page = ~0U;
