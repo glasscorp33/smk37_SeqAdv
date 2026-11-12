@@ -9,6 +9,10 @@ void fm1_web_control(void);
 void fm1_web_midi(const uint8_t *message, size_t bytes);
 void fm1_web_pause(void);
 void fm1_web_resume(void);
+/* SeqAdv sound in the simulator (seqadv_sim.c). */
+void fm1_web_seqadv_sent(unsigned port, const uint8_t *data, size_t bytes);
+int fm1_web_seqadv_due(uint32_t now_ms);
+void fm1_web_stock_midi(int enter);
 FM1_DSP_CODE void groove_note(unsigned track, unsigned note, unsigned velocity, int sequenced);
 /* groove_note with an explicit alt flag (GROOVE_STEP_ALT); selects the alt tuning table. */
 FM1_DSP_CODE void groove_note_ex(unsigned track, unsigned note, unsigned velocity, int sequenced, unsigned alt);

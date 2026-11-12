@@ -174,6 +174,7 @@ int fm1_midi_send_port(unsigned port, const uint8_t *data, size_t bytes)
         midi_capture[at].port = (uint8_t)port; midi_capture[at].bytes = (uint8_t)bytes;
         memcpy(midi_capture[at].data, data, bytes);
     }
+    fm1_web_seqadv_sent(port, data, bytes);
     return 0;
 }
 int fm1_midi_send(const uint8_t *data, size_t bytes)
@@ -419,6 +420,7 @@ EXPORT("sim_render") const float *sim_render(void)
     frames += FM1_BLOCK_FRAMES; uint32_t next = (uint32_t)(frames * 1000U / 44100U);
     unsigned poll = now_ms / 10U != next / 10U; now_ms = next;
     if (poll) { fm1_web_tick(); fm1_web_control(); }
+    else if (fm1_web_seqadv_due(now_ms)) fm1_web_control(); /* as the scan interrupt does */
     return output;
 }
 EXPORT("sim_state") const uint8_t *sim_state(void)

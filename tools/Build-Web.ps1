@@ -133,13 +133,29 @@ $loaderRule = "identity.startsWith('ota-') && identityModel(identity.slice(4))==
 if (!$updateScript.Contains($loaderRule)) { throw 'Loader identity rule not found in sdk/WebUpdate.js.' }
 $updateScript = $updateScript.Replace($loaderRule,
     "identity.startsWith('ota-') && (identityModel(identity.slice(4))===model || /^ota-SMK-37\+VA_\d{1,6}$/.test(identity));")
+# SeqAdv: make the sequencer audible in the simulator (web/engine/seqadv_sim.c)
+# and forward its MIDI to a Web MIDI output (web/page/SeqAdvSound.js). Patched
+# here, not in sdk/, for the same reason as the loader rule above. Each anchor
+# must occur exactly once, so a changed sdk/Simulator.js fails the build.
+$simScript = [IO.File]::ReadAllText((Join-Path $root 'sdk/Simulator.js'))
+function Patch-Once([string]$text, [string]$anchor, [string]$replacement) {
+    $count = ($text.Length - $text.Replace($anchor, '').Length) / $anchor.Length
+    if ($count -ne 1) { throw "SeqAdv simulator patch: expected one '$anchor' in sdk/Simulator.js, found $count." }
+    $text.Replace($anchor, $replacement)
+}
+$simScript = Patch-Once $simScript "case 'tick':" ("case 'seqadv-sound': if(c.sim_seqadv_sound)c.sim_seqadv_sound(message.flags>>>0); break;`n          case 'tick':")
+$simScript = Patch-Once $simScript 'projectRevision(){' ("seqadvMidi(){const c=this.c;if(!c.sim_seqadv_out)return;let list;for(let v;(v=c.sim_seqadv_out()>>>0);)(list||=[]).push(v);return list;}`n      projectRevision(){")
+$simScript = Patch-Once $simScript 'message.hardware=c.sim_smk37_state();' 'message.hardware=c.sim_smk37_state();message.seqadvMidi=this.seqadvMidi();'
+$simScript = Patch-Once $simScript 'this.audioAt=this.c.sim_render();this.position=0;' ("this.audioAt=this.c.sim_render();this.position=0;`n        {const midi=this.core.seqadvMidi();if(midi)this.port.postMessage({type:'seqadv-midi',midi,time:currentTime});}")
+$simScript = Patch-Once $simScript 'function receive(message) {' "function receive(message) {if(message.type==='seqadv-midi'){seqadvSound.out(message.midi,message.time);return;}if(message.seqadvMidi)seqadvSound.out(message.seqadvMidi);"
+$simScript = Patch-Once $simScript 'availability();boot();' ([IO.File]::ReadAllText((Join-Path $root 'web/page/SeqAdvSound.js')) + '  availability();boot();')
 $replacements = @{
     '/*FM1_SOURCE_URL*/'=[Net.WebUtility]::HtmlEncode($sourceUrl)
     '/*FM1_PAYLOAD*/'=('const FM1_PACKAGE = ' + $(if ($PackageJson) { $PackageJson } else { 'null' }) + ';')
     '/*FM1_SIMULATOR*/'=('const FM1_SIMULATOR = ' + $simulation + ';')
     '/*FM1_I18N*/'=[IO.File]::ReadAllText((Join-Path $root 'sdk/I18n.js'))
     '/*FM1_SCRIPT*/'=$updateScript
-    '/*FM1_SIM_SCRIPT*/'=[IO.File]::ReadAllText((Join-Path $root 'sdk/Simulator.js'))
+    '/*FM1_SIM_SCRIPT*/'=$simScript
     '/*FM1_SAMPLE_SCRIPT*/'=[IO.File]::ReadAllText((Join-Path $root 'sdk/Samples.js'))
 }
 foreach ($file in @('THIRD_PARTY.md','LICENSE.md')) {

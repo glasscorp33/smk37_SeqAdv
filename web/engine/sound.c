@@ -1089,7 +1089,9 @@ __attribute__((cold, minsize)) void groove_samples_stop(void)
 }
 void fm1_web_control(void)
 {
+    fm1_web_stock_midi(1);          /* SeqAdv simulator sound ignores stock router output */
     groove_midi_poll();
+    fm1_web_stock_midi(0);
     groove_samples_poll();
     (void)groove_performance_idle(0);
     groove_project_poll();
